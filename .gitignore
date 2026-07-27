@@ -4,7 +4,11 @@ progress.json
 
 # 临时文件
 _tmp_pages/
+_tmp_extract/
 __pycache__/
 *.pyc
 _check.js
 _smoke.js
+_page_*.png
+_t*.png
+_p*.png
