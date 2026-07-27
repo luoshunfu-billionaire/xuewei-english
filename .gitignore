@@ -1,0 +1,10 @@
+# 个人学习进度（每人一份，不上传）
+users/
+progress.json
+
+# 临时文件
+_tmp_pages/
+__pycache__/
+*.pyc
+_check.js
+_smoke.js
