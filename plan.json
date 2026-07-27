@@ -1,0 +1,10 @@
+{
+  "startDate": "2026-07-27",
+  "examDate": "2026-09-26",
+  "defaultDailyNew": 25,
+  "notes": [
+    "未完成的新词配额会在次日结算时均匀摊到考试日前每一天",
+    "刷题题库来自 questions.json，不是自动解析 PDF",
+    "PDF 资料在「资料」页打开"
+  ]
+}
