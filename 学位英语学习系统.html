@@ -22,12 +22,22 @@
 <div id="userGate">
   <div class="gate-box">
     <h2 style="color:#8b5e3c;margin-bottom:6px">选择学习者</h2>
-    <p class="note" style="margin-bottom:16px">进度保存在本机服务器，手机与电脑选同一名字即可同步</p>
+    <p class="note" id="gateNote" style="margin-bottom:16px">进度保存在本机服务器，手机与电脑选同一名字即可同步</p>
     <div id="userList"></div>
     <div style="margin-top:16px">
       <input id="newUserName" placeholder="输入名字新建，如：小明" maxlength="20"
         style="padding:10px;border:1px solid #ccc;border-radius:8px;width:60%;font-size:15px">
       <button class="btn" onclick="createUser()">新建并进入</button>
+    </div>
+    <div class="server-cfg">
+      <p class="note" style="margin-bottom:8px">连接电脑同步（需同一 Wi-Fi）</p>
+      <div class="server-row">
+        <input id="serverUrl" placeholder="http://192.168.x.x:5000" maxlength="80"
+          autocomplete="off" autocapitalize="off" spellcheck="false">
+        <button class="btn" type="button" onclick="connectServer()">连接</button>
+        <button class="btn ghost" type="button" onclick="useLocalMode()">仅本机</button>
+      </div>
+      <p class="note" id="serverStatus" style="margin-top:8px"></p>
     </div>
     <p id="gateErr" class="note" style="color:#e57373;margin-top:8px"></p>
   </div>
@@ -146,7 +156,10 @@
 setTimeout(function(){
   var b = document.getElementById('boot');
   if(b && !b.classList.contains('hidden') && getComputedStyle(b).display !== 'none'){
-    b.innerHTML = '加载时间过长。<br>请确认已运行「启动学习系统.bat」，并用浏览器打开 <b>http://localhost:5000</b><br>然后强制刷新（Ctrl+F5）';
+    var cap = window.Capacitor && Capacitor.isNativePlatform && Capacitor.isNativePlatform();
+    b.innerHTML = cap
+      ? '加载失败。请重新安装最新 APK，或清除应用数据后重试。'
+      : '加载时间过长。<br>请确认已运行「启动学习系统.bat」，并用浏览器打开 <b>http://localhost:5000</b><br>然后强制刷新（Ctrl+F5）';
   }
 }, 8000);
 </script>

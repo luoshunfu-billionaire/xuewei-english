@@ -10,3 +10,10 @@ _smoke.js
 _page_*.png
 _t*.png
 _p*.png
+
+# App 打包（Capacitor）
+node_modules/
+android/
+app/
+*.apk
+*.keystore

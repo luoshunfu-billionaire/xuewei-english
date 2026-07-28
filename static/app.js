@@ -26,6 +26,9 @@ let S = emptyState();
 let CURRENT = '';
 let ready = false;
 let visBound = false;
+let SERVER = false;   // true=连本机/局域网服务器同步；false=纯本地模式（App 未配置或离线）
+let API_BASE = '';    // ''=同域；App 里填 http://192.168.x.x:5000
+const LS_API = 'xwApiBase';
 
 function emptyState(){
   return {
@@ -83,11 +86,110 @@ function esc(s){
 
 function isFilePage(){ return location.protocol === 'file:'; }
 
+function isCapApp(){
+  try{
+    return !!(window.Capacitor && typeof window.Capacitor.isNativePlatform === 'function'
+      && window.Capacitor.isNativePlatform());
+  }catch(e){ return false; }
+}
+
+function loadApiBase(){
+  try{
+    API_BASE = String(localStorage.getItem(LS_API) || '').trim().replace(/\/+$/, '');
+  }catch(e){ API_BASE = ''; }
+}
+
+function saveApiBase(url){
+  API_BASE = String(url || '').trim().replace(/\/+$/, '');
+  try{
+    if(API_BASE) localStorage.setItem(LS_API, API_BASE);
+    else localStorage.removeItem(LS_API);
+  }catch(e){}
+}
+
+function apiUrl(path){
+  const p = path.charAt(0) === '/' ? path : '/' + path;
+  return API_BASE ? (API_BASE + p) : p;
+}
+
+function cleanUserName(name){
+  return String(name || '').trim().replace(/[^a-zA-Z0-9_\u4e00-\u9fff\-]/g, '').slice(0, 20);
+}
+
+function normalizeServerUrl(raw){
+  let u = String(raw || '').trim();
+  if(!u) return '';
+  if(!/^https?:\/\//i.test(u)) u = 'http://' + u;
+  return u.replace(/\/+$/, '');
+}
+
+/* 探测服务器是否可用：不可用则进入纯本地模式（进度只存 localStorage）。
+   App 内同源没有 /api，须配置局域网地址；并校验 JSON 内容，避免误判。 */
+async function detectMode(){
+  if(isFilePage()){ SERVER = false; return; }
+  loadApiBase();
+  if(isCapApp() && !API_BASE){ SERVER = false; return; }
+  try{
+    const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timer = setTimeout(() => { try{ ctrl && ctrl.abort(); }catch(e){} }, 3500);
+    const res = await fetch(apiUrl('/api/health'), {
+      cache: 'no-store',
+      signal: ctrl ? ctrl.signal : undefined
+    });
+    clearTimeout(timer);
+    const data = await res.json();
+    SERVER = !!(res.ok && data && data.ok === true);
+  }catch(e){ SERVER = false; }
+}
+
+/* 本机用户名单（含联网学过的用户，断网后仍可进入） */
+function localUsers(){
+  const names = [];
+  const add = (n) => {
+    n = cleanUserName(n);
+    if(n && names.indexOf(n) < 0) names.push(n);
+  };
+  try{
+    const u = JSON.parse(localStorage.getItem('xwUsers') || '[]');
+    if(Array.isArray(u)) u.forEach(add);
+  }catch(e){}
+  try{
+    for(let i = 0; i < localStorage.length; i++){
+      const k = localStorage.key(i);
+      if(k && k.indexOf('xwState_') === 0) add(k.slice('xwState_'.length));
+    }
+  }catch(e){}
+  return names.sort();
+}
+
+function rememberUser(name){
+  const clean = cleanUserName(name);
+  if(!clean) return;
+  const users = localUsers();
+  if(users.indexOf(clean) < 0){
+    users.push(clean);
+    users.sort();
+  }
+  try{ localStorage.setItem('xwUsers', JSON.stringify(users)); }catch(e){}
+}
+
+function stateTs(st){
+  return (st && st.updatedAt) | 0;
+}
+
+function userButtons(list){
+  return list.length
+    ? list.map(n =>
+        `<button class="userbtn" onclick="selectUser('${encodeURIComponent(n)}')">👤 ${esc(n)}<span class="note">进入 ›</span></button>`
+      ).join('')
+    : '<p class="note">还没有用户，先在下方新建一个</p>';
+}
+
 function setSyncStatus(st){
   const el = document.getElementById('syncChip');
   if(!el) return;
   el.className = 'syncchip' + (st === 'ok' || st === 'warn' || st === 'err' ? ' ' + st : '');
-  const map = { ok: '已同步', warn: '同步中…', err: '同步失败', '…': '同步中…' };
+  const map = { ok: '已同步', warn: '同步中…', err: '本地已存', '…': '同步中…', '本地': '本地' };
   el.textContent = map[st] || String(st);
 }
 
@@ -104,9 +206,10 @@ async function save(){
   ensurePlan();
   S.updatedAt = Date.now();
   try{ localStorage.setItem(lsKey(), JSON.stringify(S)); }catch(e){}
+  if(!SERVER){ setSyncStatus('本地'); return; }
   setSyncStatus('…');
   try{
-    const res = await fetch('/api/state?user=' + encodeURIComponent(CURRENT), {
+    const res = await fetch(apiUrl('/api/state?user=' + encodeURIComponent(CURRENT)), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(S),
@@ -146,37 +249,100 @@ function reRenderActive(){
 }
 
 /* ---------- 用户 ---------- */
+function refreshServerCfgUi(){
+  const input = document.getElementById('serverUrl');
+  const st = document.getElementById('serverStatus');
+  if(input && document.activeElement !== input){
+    input.value = API_BASE || '';
+    input.placeholder = isCapApp()
+      ? 'http://192.168.x.x:5000（电脑启动窗口里的地址）'
+      : '留空=本机；或填 http://192.168.x.x:5000';
+  }
+  if(!st) return;
+  if(SERVER && API_BASE) st.textContent = '已连接：' + API_BASE;
+  else if(SERVER) st.textContent = '已连接本机服务器';
+  else if(API_BASE) st.textContent = '未连上：' + API_BASE + '（请确认电脑已启动、同一 Wi-Fi）';
+  else if(isCapApp()) st.textContent = '未配置电脑地址，当前为纯本机模式';
+  else st.textContent = '未连上服务器，当前为纯本机模式';
+}
+
 function showUserPicker(){
   document.getElementById('userGate').style.display = 'flex';
   document.getElementById('gateErr').textContent = '';
-  if(isFilePage()){
-    document.getElementById('userList').innerHTML = '';
-    document.getElementById('gateErr').textContent =
-      '请先运行「启动学习系统.bat」，再用浏览器打开 http://localhost:5000（不要直接双击打开 HTML）';
+  refreshServerCfgUi();
+  const note = document.getElementById('gateNote');
+  const locals = localUsers();
+  if(!SERVER){
+    if(note) note.textContent = isCapApp()
+      ? '可先填电脑地址连接同步；断网时选同一名字即可继续本机进度'
+      : '进度保存在本机；换设备可在「今日 → 设置」里导出/导入进度迁移';
+    document.getElementById('userList').innerHTML = userButtons(locals);
     return;
   }
-  fetch('/api/users').then(r => r.json()).then(list => {
-    document.getElementById('userList').innerHTML = list.length
-      ? list.map(n =>
-          `<button class="userbtn" onclick="selectUser('${encodeURIComponent(n)}')">👤 ${esc(n)}<span class="note">进入 ›</span></button>`
-        ).join('')
-      : '<p class="note">还没有用户，先在下方新建一个</p>';
+  if(note) note.textContent = '进度会同时保存在手机和电脑；手机与电脑选同一名字即可同步';
+  fetch(apiUrl('/api/users')).then(r => r.json()).then(list => {
+    const merged = [];
+    const add = (n) => {
+      n = cleanUserName(n);
+      if(n && merged.indexOf(n) < 0) merged.push(n);
+    };
+    (Array.isArray(list) ? list : []).forEach(add);
+    locals.forEach(add);
+    merged.sort();
+    document.getElementById('userList').innerHTML = userButtons(merged);
   }).catch(() => {
-    document.getElementById('userList').innerHTML = '';
+    document.getElementById('userList').innerHTML = userButtons(locals);
     document.getElementById('gateErr').textContent =
-      '连不上服务器：请先运行「启动学习系统.bat」，再访问 http://localhost:5000';
+      '连不上服务器，已显示本机用户。本机进度仍在，连上后再同步即可';
   });
+}
+
+async function connectServer(){
+  const input = document.getElementById('serverUrl');
+  const err = document.getElementById('gateErr');
+  const raw = input ? input.value : API_BASE;
+  const url = normalizeServerUrl(raw);
+  if(!url){
+    if(err) err.textContent = '请先填写电脑地址，例如 http://192.168.1.8:5000';
+    return;
+  }
+  if(err) err.textContent = '';
+  saveApiBase(url);
+  if(input) input.value = url;
+  const st = document.getElementById('serverStatus');
+  if(st) st.textContent = '正在连接…';
+  await detectMode();
+  refreshServerCfgUi();
+  if(SERVER){
+    if(err) err.textContent = '';
+    showUserPicker();
+  }else if(err){
+    err.textContent = '连接失败：请确认电脑已启动、手机与电脑同一 Wi-Fi，且地址与启动窗口一致';
+  }
+}
+
+async function useLocalMode(){
+  saveApiBase('');
+  SERVER = false;
+  const err = document.getElementById('gateErr');
+  if(err) err.textContent = '';
+  showUserPicker();
 }
 
 function createUser(){
   const name = document.getElementById('newUserName').value.trim();
   if(!name) return;
-  if(isFilePage()){
-    document.getElementById('gateErr').textContent =
-      '离线无法创建共享账号，请通过 bat 启动后的地址访问';
+  const clean = cleanUserName(name);
+  if(!clean){
+    document.getElementById('gateErr').textContent = '名字含非法字符，请换一个';
     return;
   }
-  fetch('/api/newuser?user=' + encodeURIComponent(name), { method: 'POST' })
+  rememberUser(clean);
+  if(!SERVER){
+    selectUser(encodeURIComponent(clean));
+    return;
+  }
+  fetch(apiUrl('/api/newuser?user=' + encodeURIComponent(clean)), { method: 'POST' })
     .then(r => {
       if(!r.ok) throw new Error('http ' + r.status);
       return r.json();
@@ -186,7 +352,11 @@ function createUser(){
       else document.getElementById('gateErr').textContent = r.err || '创建失败';
     })
     .catch(() => {
-      document.getElementById('gateErr').textContent = '创建失败：服务器未启动或网络不通';
+      // 服务器不可用：仍可进入本机进度，避免联网学过的数据“消失”
+      SERVER = false;
+      setSyncStatus('本地');
+      document.getElementById('gateErr').textContent = '服务器暂不可用，已用本机进度进入';
+      selectUser(encodeURIComponent(clean));
     });
 }
 
@@ -196,28 +366,54 @@ async function selectUser(enc){
   setSyncStatus('…');
   document.getElementById('userGate').style.display = 'none';
   document.getElementById('userChip').textContent = '👤 ' + CURRENT;
+  rememberUser(CURRENT);
 
+  S = emptyState();
+  let hasLocal = false;
   try{
-    const local = JSON.parse(localStorage.getItem(lsKey()));
+    const raw = localStorage.getItem(lsKey());
+    const local = raw ? JSON.parse(raw) : null;
     if(local && typeof local === 'object'){
       S = local;
+      hasLocal = true;
       ensurePlan();
       renderHome();
     }
   }catch(e){}
 
-  try{
-    const res = await fetch('/api/state?user=' + encodeURIComponent(CURRENT));
-    if(!res.ok) throw new Error('http ' + res.status);
-    const s = await res.json();
-    if(s && typeof s === 'object' && (s.words || s.updatedAt != null)){
-      S = s;
-      ensurePlan();
-      try{ localStorage.setItem(lsKey(), JSON.stringify(S)); }catch(e){}
+  if(SERVER){
+    try{
+      const res = await fetch(apiUrl('/api/state?user=' + encodeURIComponent(CURRENT)));
+      if(!res.ok) throw new Error('http ' + res.status);
+      const s = await res.json();
+      if(s && typeof s === 'object' && (s.words || s.updatedAt != null)){
+        const srvTs = stateTs(s);
+        const locTs = stateTs(S);
+        // 取更新的一份，避免断网期间的本机进度被服务器旧数据盖掉
+        if(!hasLocal || srvTs > locTs){
+          S = s;
+        }
+        ensurePlan();
+        try{ localStorage.setItem(lsKey(), JSON.stringify(S)); }catch(e){}
+        if(hasLocal && locTs > srvTs){
+          // 本机更新：立刻回传服务器
+          ready = true;
+          await save();
+          settlePlan();
+          renderHome();
+          bindVisibility();
+          return;
+        }
+      }
+      setSyncStatus('ok');
+    }catch(e){
+      // 拉服务器失败：继续用本机进度
+      try{ localStorage.setItem(lsKey(), JSON.stringify(S)); }catch(err){}
+      setSyncStatus(hasLocal ? '本地' : 'err');
     }
-    setSyncStatus('ok');
-  }catch(e){
-    setSyncStatus('err');
+  }else{
+    try{ localStorage.setItem(lsKey(), JSON.stringify(S)); }catch(e){}
+    setSyncStatus('本地');
   }
 
   ready = true;
@@ -227,9 +423,9 @@ async function selectUser(enc){
 }
 
 async function pullServerState(){
-  if(!CURRENT || !ready) return;
+  if(!SERVER || !CURRENT || !ready) return;
   try{
-    const res = await fetch('/api/state?user=' + encodeURIComponent(CURRENT));
+    const res = await fetch(apiUrl('/api/state?user=' + encodeURIComponent(CURRENT)));
     if(!res.ok) throw new Error('http ' + res.status);
     const s = await res.json();
     const srvTs = (s && s.updatedAt) | 0;
@@ -533,6 +729,7 @@ function showCard(){
   document.getElementById('learnProgress').textContent =
     `今日新词 ${learnIdx + 1} / ${learnQueue.length}`;
   cardShownAt = now();
+  speak();
 }
 
 function reveal(){
@@ -541,8 +738,32 @@ function reveal(){
 
 function speak(){
   const v = learnQueue[learnIdx];
-  if(!v) return;
-  const u = new SpeechSynthesisUtterance(v.w);
+  if(!v || !v.w) return;
+  speakText(v.w);
+}
+
+function speakText(text){
+  const t = String(text || '').trim();
+  if(!t) return;
+  // Android WebView 的 speechSynthesis 基本不可用，App 内走系统 TTS
+  try{
+    const cap = window.Capacitor;
+    const tts = cap && cap.Plugins && cap.Plugins.TextToSpeech;
+    if(tts && typeof tts.speak === 'function'){
+      tts.speak({
+        text: t,
+        lang: 'en-US',
+        rate: 0.9,
+        pitch: 1.0,
+        volume: 1.0,
+        queueStrategy: 1
+      }).catch(function(){});
+      return;
+    }
+  }catch(e){}
+  if(typeof speechSynthesis === 'undefined' || typeof SpeechSynthesisUtterance === 'undefined') return;
+  try{ speechSynthesis.cancel(); }catch(e){}
+  const u = new SpeechSynthesisUtterance(t);
   u.lang = 'en-US';
   u.rate = 0.85;
   speechSynthesis.speak(u);
@@ -912,7 +1133,7 @@ async function renderMaterials(){
     </p>
     <p class="note">加载中…</p>`;
   try{
-    const res = await fetch('/api/materials');
+    const res = await fetch(apiUrl('/api/materials'));
     if(!res.ok) throw new Error('http ' + res.status);
     const items = await res.json();
     if(!items.length){
@@ -932,15 +1153,18 @@ async function renderMaterials(){
     for(const g of Object.keys(groups)){
       html += `<h2 style="font-size:15px;margin-top:12px">${esc(g)}</h2>`;
       groups[g].forEach(it => {
+        const href = apiUrl(it.url);
         html += `<div class="mat-item"><span>${esc(it.name)}</span>
-          <a href="${esc(it.url)}" target="_blank" rel="noopener">打开</a></div>`;
+          <a href="${esc(href)}" target="_blank" rel="noopener">打开</a></div>`;
       });
     }
     box.innerHTML = html;
   }catch(e){
     box.innerHTML = `
       <h2>学习资料（PDF）</h2>
-      <p class="note">无法加载资料列表，请确认服务器已启动。</p>`;
+      <p class="note">${SERVER
+        ? '无法加载资料列表，请确认服务器已启动。'
+        : '手机版不含 PDF 资料；真题/模拟卷等 PDF 请在电脑端「资料」页查看。'}</p>`;
   }
 }
 
@@ -1197,11 +1421,30 @@ function renderStats(){
 }
 
 /* ---------- 备份 ---------- */
-function exportData(){
-  const blob = new Blob([JSON.stringify(S, null, 1)], { type: 'application/json' });
+async function exportData(){
+  const json = JSON.stringify(S, null, 1);
+  const fname = '学位英语进度备份_' + (CURRENT || 'user') + '_' + todayStr() + '.json';
+  // App 内（Capacitor）：写缓存文件后调系统分享，可发微信/QQ/网盘
+  const cap = window.Capacitor;
+  if(cap && cap.isNativePlatform && cap.isNativePlatform() && cap.Plugins && cap.Plugins.Filesystem){
+    try{
+      const r = await cap.Plugins.Filesystem.writeFile({
+        path: fname, data: json, directory: 'CACHE', recursive: true
+      });
+      if(cap.Plugins.Share){
+        await cap.Plugins.Share.share({ title: '学习进度备份', text: '学习进度备份', url: r.uri, dialogTitle: '发送/保存进度备份' });
+      }else{
+        alert('已保存：' + r.uri);
+      }
+    }catch(e){
+      if(e && e.message !== 'Share canceled') alert('导出失败：' + (e.message || e));
+    }
+    return;
+  }
+  const blob = new Blob([json], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = '学位英语进度备份_' + todayStr() + '.json';
+  a.download = fname;
   a.click();
 }
 
@@ -1279,5 +1522,6 @@ function wireNav(){
     if(e.target && e.target.classList && e.target.classList.contains('pcn'))
       e.target.classList.add('reveal');
   });
+  await detectMode();
   showUserPicker();
 })();

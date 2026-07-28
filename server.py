@@ -116,12 +116,20 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         pass
 
     def end_headers(self):
+        # App（Capacitor https://localhost）跨域访问局域网 API 需要 CORS
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
         path = urlparse(self.path).path.lower()
         if path.endswith(('.html', '.js', '.css')):
             self.send_header('Cache-Control', 'no-store')
         elif path.startswith('/api/'):
             self.send_header('Cache-Control', 'no-store')
         super().end_headers()
+
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self.end_headers()
 
     def _json(self, obj, code=200):
         body = json.dumps(obj, ensure_ascii=False).encode('utf-8')
@@ -200,24 +208,32 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
 
 
-def lan_ip() -> str:
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+def lan_ips() -> list[str]:
+    """列出本机所有局域网 IPv4（排除回环/链路本地），VPN 虚拟网卡地址也会列出，按名称排序。"""
+    ips = []
     try:
-        s.connect(('10.255.255.255', 1))
-        return s.getsockname()[0]
+        for _, addrs in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            ip = addrs[0]
+            if ip.startswith(('127.', '169.254.')) or ip in ips:
+                continue
+            ips.append(ip)
     except Exception:
-        return '127.0.0.1'
-    finally:
-        s.close()
+        pass
+    if not ips:
+        ips.append('127.0.0.1')
+    return sorted(ips)
 
 
 if __name__ == '__main__':
     migrate_old_progress()
-    ip = lan_ip()
+    ips = lan_ips()
     print('=' * 50)
     print('  学位英语学习系统已启动')
     print(f'  电脑：http://localhost:{PORT}')
-    print(f'  手机/平板：http://{ip}:{PORT}')
+    for ip in ips:
+        print(f'  手机/平板：http://{ip}:{PORT}')
+    if len(ips) > 1:
+        print('  有多个地址时，用手机 Wi-Fi 同网段的（一般 192.168.x.x 且与手机前三段相同）')
     print('  需同一 Wi-Fi；关闭本窗口即停止同步')
     print('  若手机打不开：检查 Windows 防火墙是否放行端口 5000')
     print('=' * 50)
