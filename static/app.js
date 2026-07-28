@@ -3,6 +3,9 @@
 
 let VOCAB = [];
 let QUESTIONS = [];
+let STUDY = { modules: [] };
+let studyView = null;   // 当前打开的复习模块 id
+let studyMask = true;   // 对照类默认遮挡中文
 
 const START_DATE = '2026-07-27';
 const EXAM_DATE = '2026-09-26';
@@ -31,6 +34,7 @@ function emptyState(){
     days: {},
     extTasks: {},
     plan: { extra: {}, settledThrough: null },
+    study: {},
     updatedAt: 0
   };
 }
@@ -138,6 +142,7 @@ function reRenderActive(){
   else if(t === 'drill') renderDrillHome();
   else if(t === 'wrong') renderWrong();
   else if(t === 'materials') renderMaterials();
+  else if(t === 'study') renderStudy();
 }
 
 /* ---------- 用户 ---------- */
@@ -921,7 +926,8 @@ async function renderMaterials(){
     let html = `
       <h2>学习资料（PDF）</h2>
       <p class="note" style="margin-bottom:14px">
-        刷题题库来自 questions.json（已录入的选择题），PDF 资料需自行阅读，不会自动变成刷题。
+        语法/搭配/翻译/作文等资料已整理进「复习资料」标签页，可在线阅读并标记进度；
+        此处为原始 PDF，需要对照原文时使用。
       </p>`;
     for(const g of Object.keys(groups)){
       html += `<h2 style="font-size:15px;margin-top:12px">${esc(g)}</h2>`;
@@ -936,6 +942,158 @@ async function renderMaterials(){
       <h2>学习资料（PDF）</h2>
       <p class="note">无法加载资料列表，请确认服务器已启动。</p>`;
   }
+}
+
+/* ---------- 复习资料（study.json） ---------- */
+const PAIR_PAGE = 60;
+
+function studyMods(){ return (STUDY && STUDY.modules) || []; }
+
+function studyDoneSet(modId){
+  if(!S.study || typeof S.study !== 'object') S.study = {};
+  return new Set(S.study[modId] || []);
+}
+
+function pairTable(items, swap, unitKey){
+  let rows = '';
+  items.forEach((it, i) => {
+    const first = swap ? it.cn : it.en;
+    const second = swap ? it.en : it.cn;
+    rows += `<tr><td class="pen">${esc(first)}</td>
+      <td class="pcn" data-u="${unitKey}" data-i="${i}">${esc(second)}</td></tr>`;
+  });
+  return `<table class="pair-tab">${rows}</table>`;
+}
+
+function studyUnits(mod){
+  if(mod.kind === 'article')
+    return (mod.sections || []).map((s, i) => ({
+      key: 's' + i,
+      title: s.t || ('第 ' + (i + 1) + ' 节'),
+      html: `<div class="study-text">${esc(s.body)}</div>`
+    }));
+  if(mod.kind === 'essays')
+    return (mod.items || []).map((it, i) => ({
+      key: 'e' + i,
+      title: it.t || ('范文 ' + (i + 1)),
+      html: `<div class="study-text">${esc(it.body)}</div>`
+    }));
+  // pairs：有 groups 按组分；否则每 PAIR_PAGE 条一页
+  const units = [];
+  if(Array.isArray(mod.groups)){
+    mod.groups.forEach((g, gi) => units.push({
+      key: 'g' + gi,
+      title: `${g.t}（${g.items.length} 条）`,
+      html: pairTable(g.items, mod.swap, 'g' + gi)
+    }));
+  }else{
+    const items = mod.items || [];
+    for(let p = 0; p * PAIR_PAGE < items.length; p++){
+      const slice = items.slice(p * PAIR_PAGE, (p + 1) * PAIR_PAGE);
+      units.push({
+        key: 'p' + p,
+        title: `第 ${p * PAIR_PAGE + 1}–${p * PAIR_PAGE + slice.length} 条`,
+        html: pairTable(slice, mod.swap, 'p' + p)
+      });
+    }
+  }
+  return units;
+}
+
+function renderStudy(){
+  const box = document.getElementById('studyBox');
+  if(!box) return;
+  if(studyView) return renderStudyModule(box);
+  const mods = studyMods();
+  if(!mods.length){
+    box.innerHTML = '<h2>复习资料</h2><p class="note">未找到 study.json，请重新生成。</p>';
+    return;
+  }
+  const cats = {};
+  mods.forEach(m => { (cats[m.cat] = cats[m.cat] || []).push(m); });
+  let html = `<h2>复习资料</h2>
+    <p class="note" style="margin-bottom:8px">
+      语法讲解、固定搭配、同位词、完形、翻译、作文模板都已整理进来，点开即读，可标记「已读」跟踪进度。
+    </p>`;
+  for(const cat of Object.keys(cats)){
+    html += `<h3 class="study-cat">${esc(cat)}</h3>`;
+    cats[cat].forEach(m => {
+      const total = studyUnits(m).length;
+      const done = studyDoneSet(m.id).size;
+      const pct = total ? Math.round(done / total * 100) : 0;
+      html += `<div class="study-mod" onclick="openStudyModule('${m.id}')">
+        <div><div class="sm-title">${esc(m.title)}</div>
+        <div class="sm-meta">${total} 个单元 · ${esc(m.src || '')}</div></div>
+        <div class="sm-prog">
+          <div class="note">${done}/${total}</div>
+          <div class="progress"><div style="width:${pct}%"></div></div>
+        </div>
+      </div>`;
+    });
+  }
+  box.innerHTML = html;
+}
+
+function openStudyModule(id){
+  studyView = id;
+  renderStudy();
+}
+
+function closeStudyModule(){
+  studyView = null;
+  renderStudy();
+}
+
+function renderStudyModule(box){
+  const mod = studyMods().find(m => m.id === studyView);
+  if(!mod){ studyView = null; return renderStudy(); }
+  const units = studyUnits(mod);
+  const done = studyDoneSet(mod.id);
+  const isPairs = mod.kind === 'pairs';
+  let html = `<h2>${esc(mod.title)}</h2>
+    <p class="note" style="margin-bottom:10px">
+      <a href="javascript:closeStudyModule()" style="color:#8b5e3c">‹ 返回资料列表</a>
+      　已完成 ${done.size}/${units.length}
+      ${isPairs ? `　<button class="btn ghost" style="padding:3px 10px;font-size:12px" onclick="toggleStudyMask()">${studyMask ? '显示中文' : '遮挡中文'}</button>` : ''}
+    </p>`;
+  units.forEach(u => {
+    const isDone = done.has(u.key);
+    html += `<div class="study-unit${isDone ? ' done' : ''}" id="su-${u.key}">
+      <div class="study-unit-head" onclick="toggleUnitOpen('${u.key}')">
+        <span>${esc(u.title)}</span>
+        <span class="su-done" onclick="event.stopPropagation();toggleStudyUnit('${mod.id}','${u.key}')">
+          ${isDone ? '✓ 已读（点我取消）' : '标记已读'}
+        </span>
+      </div>
+      <div class="study-unit-body${isPairs && studyMask ? ' mask-cn' : ''}">${u.html}</div>
+    </div>`;
+  });
+  box.innerHTML = html;
+}
+
+function toggleUnitOpen(key){
+  const el = document.getElementById('su-' + key);
+  if(el) el.classList.toggle('open');
+}
+
+function toggleStudyMask(){
+  studyMask = !studyMask;
+  renderStudy();
+}
+
+function revealPair(el){
+  el.classList.add('reveal');
+}
+
+function toggleStudyUnit(modId, key){
+  if(!requireReady()) return;
+  if(!S.study || typeof S.study !== 'object') S.study = {};
+  const arr = S.study[modId] || [];
+  const i = arr.indexOf(key);
+  if(i >= 0) arr.splice(i, 1); else arr.push(key);
+  S.study[modId] = arr;
+  save();
+  renderStudy();
 }
 
 /* ---------- 统计 ---------- */
@@ -1085,6 +1243,7 @@ function wireNav(){
       if(t === 'drill') renderDrillHome();
       if(t === 'wrong') renderWrong();
       if(t === 'materials') renderMaterials();
+      if(t === 'study') renderStudy();
     };
   });
 }
@@ -1092,15 +1251,18 @@ function wireNav(){
 (async function boot(){
   const bootEl = document.getElementById('boot');
   try{
-    const [vRes, qRes] = await Promise.all([
+    const [vRes, qRes, sRes] = await Promise.all([
       fetch('/vocab.json'),
-      fetch('/questions.json')
+      fetch('/questions.json'),
+      fetch('/study.json')
     ]);
     if(!vRes.ok || !qRes.ok) throw new Error('load fail');
     VOCAB = await vRes.json();
     QUESTIONS = await qRes.json();
+    if(sRes.ok) STUDY = await sRes.json();
     if(!Array.isArray(VOCAB)) VOCAB = [];
     if(!Array.isArray(QUESTIONS)) QUESTIONS = [];
+    if(!STUDY || !Array.isArray(STUDY.modules)) STUDY = { modules: [] };
   }catch(e){
     if(bootEl) bootEl.textContent = '加载词库/题库失败，请确认已通过「启动学习系统.bat」访问本站';
     if(isFilePage()){
@@ -1113,5 +1275,9 @@ function wireNav(){
     bootEl.style.display = 'none';
   }
   wireNav();
+  document.addEventListener('click', e => {
+    if(e.target && e.target.classList && e.target.classList.contains('pcn'))
+      e.target.classList.add('reveal');
+  });
   showUserPicker();
 })();
