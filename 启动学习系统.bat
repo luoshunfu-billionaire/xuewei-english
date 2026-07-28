@@ -2,6 +2,9 @@
 chcp 65001 >nul
 cd /d "%~dp0"
 
+REM 启动前先拉取最新学习进度（断网时静默跳过）
+git pull --rebase >nul 2>&1
+
 set "PYTHON="
 
 where py >nul 2>&1

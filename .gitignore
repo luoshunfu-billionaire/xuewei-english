@@ -1,6 +1,4 @@
-# 个人学习进度（每人一份，不上传）
-users/
-progress.json
+# 个人学习进度 users/ 需要提交到 git，用于多电脑同步，不要忽略
 
 # 临时文件
 _tmp_pages/
