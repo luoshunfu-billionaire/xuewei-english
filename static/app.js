@@ -1452,6 +1452,7 @@ function startDrillSrc(enc){
 // 四种练习模式 + 单题练习的公共装填函数
 function _beginDrill(list, mode, ordered){
   if(!requireReady()) return;
+  goto('drill');   // 切到刷真题 tab，否则 showDrillQ 渲染进隐藏容器看不到
   drillMode = mode;
   drillQ = list.slice();
   if(!ordered) shuffle(drillQ);
