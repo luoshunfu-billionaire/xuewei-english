@@ -729,7 +729,7 @@ function renderHome(){
     { name: `背新词 ${target} 个`, prog: `${doneNew}/${target}`, go: 'learn', btn: '去学' },
     { name: '主动复习生词', prog: due ? `${due} 个到期` : (wrongN ? `${wrongN} 个错词可刷` : '生词本/今日词/错词'), go: 'review', btn: '去复习' },
     { name: '单词练习', prog: t.quiz != null ? `今日测验 ${t.quiz}/10` : '测验 · 默写 · 听写 · 填词', go: 'quiz', btn: '去练习' },
-    { name: '刷真题', prog: `题库 ${QUESTIONS.length} 题`, go: 'drill', btn: '去刷题' },
+    { name: '刷真题', prog: (() => { const dn = dueDrills().length; return `题库 ${QUESTIONS.length} 题` + (dn ? ` · 待重练 ${dn}` : ''); })(), go: 'drill', btn: '去刷题' },
     { name: '重做错题', prog: wd ? `${wd} 题待重做` : '无待重做', go: 'wrong', btn: '去错题本' }
   ];
   const ext = [
@@ -1590,7 +1590,8 @@ function renderWrong(){
   html += all.map(x => `<div class="task ${x.r.cleared ? 'done' : ''}">
     <div style="flex:1"><div>${esc(x.q.part)} · ${esc(x.q.src)}</div>
     <div class="note">错 ${x.r.times} 次${x.r.cleared ? ' · 已攻克' : ' · ' + (x.r.due <= todayStr() ? '今日重做' : esc(x.r.due) + ' 重做')}</div></div>
-    <button class="btn ghost" onclick="previewWrong('${esc(x.q.id)}')">看题</button></div>`).join('')
+    <button class="btn ghost" onclick="previewWrong('${esc(x.q.id)}')">看题</button>
+    <button class="btn ghost" onclick="startSingleDrill('${esc(x.q.id)}')">重练</button></div>`).join('')
     || '<p class="note">还没有错题，去刷真题吧</p>';
   html += `<div id="wrongPreview"></div>`;
   document.getElementById('wrongBox').innerHTML = html;
