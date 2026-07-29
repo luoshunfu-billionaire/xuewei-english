@@ -463,6 +463,7 @@ function ensurePlan(){
   if(!S.words) S.words = {};
   if(!S.days) S.days = {};
   if(!S.extTasks) S.extTasks = {};
+  if(!S.drillProg || typeof S.drillProg !== 'object') S.drillProg = {};
 }
 
 function learnedNewOn(date){
@@ -598,11 +599,101 @@ function isDue(w){
 function dueWords(){ return VOCAB.filter(v => isDue(v.w)); }
 function learningWords(){ return VOCAB.filter(v => S.words[v.w] && S.words[v.w].st === 'learning'); }
 
+function todayLearnedWords(){
+  const td = todayStr();
+  return VOCAB.filter(v => {
+    const r = S.words[v.w];
+    if(!r) return false;
+    if(r.learnedOn === td) return true;
+    return (r.hist || []).some(h => h.d === td);
+  });
+}
+
+function wrongVocabWords(){
+  const score = {};
+  (S.quizLog || []).forEach(l => {
+    if(!l.ok && l.w) score[l.w] = (score[l.w] || 0) + 1;
+  });
+  Object.entries(S.words || {}).forEach(([w, r]) => {
+    if((r.lapses || 0) > 0) score[w] = (score[w] || 0) + (r.lapses || 0);
+  });
+  return VOCAB.filter(v => score[v.w])
+    .sort((a, b) => (score[b.w] || 0) - (score[a.w] || 0));
+}
+
+function practicePool(prefer, n){
+  let pool = [];
+  const push = arr => {
+    for(const v of arr){
+      if(!pool.find(x => x.w === v.w)) pool.push(v);
+      if(n && pool.length >= n * 3) break;
+    }
+  };
+  if(prefer === 'due') push(dueWords());
+  else if(prefer === 'learning') push(learningWords());
+  else if(prefer === 'today') push(todayLearnedWords());
+  else if(prefer === 'wrong') push(wrongVocabWords());
+  else{
+    push(dueWords());
+    push(todayLearnedWords());
+    push(wrongVocabWords());
+    push(learningWords());
+  }
+  if(pool.length < (n || 10)) push(todayNewWords());
+  if(pool.length < (n || 10)) push(VOCAB.slice(0, 300));
+  shuffle(pool);
+  return n ? pool.slice(0, n) : pool;
+}
+
+function normAns(s){
+  return String(s || '').trim().toLowerCase()
+    .replace(/[’‘]/g, "'")
+    .replace(/\s+/g, ' ');
+}
+function ansMatch(input, answer){
+  const a = normAns(input), b = normAns(answer);
+  if(!a || !b) return false;
+  if(a === b) return true;
+  if(a.replace(/-/g, '') === b.replace(/-/g, '')) return true;
+  return false;
+}
+
+function clozeSentence(v){
+  const g = posGroup(v.pos);
+  if(g === '动词') return `Please ______ it carefully.`;
+  if(g === '名词') return `This ______ really matters.`;
+  if(g === '形容词') return `It looks quite ______.`;
+  if(g === '副词') return `She did it ______.`;
+  return `The key word is ______.`;
+}
+
+function ensureWordRecord(v, ok){
+  const td = todayStr();
+  let r = S.words[v.w];
+  if(!r){
+    r = S.words[v.w] = {
+      st: 'learning', ef: 2.5, reps: 0, iv: 1,
+      due: addDays(td, 1), n: 1, lapses: ok ? 0 : 1,
+      learnedOn: td, hist: []
+    };
+  }
+  if(!ok){
+    r.lapses = (r.lapses || 0) + 1;
+    if(r.st === 'mastered'){
+      r.st = 'learning'; r.reps = 0; r.iv = 1; r.due = addDays(td, 1);
+    }else if(!r.due || r.due > td){
+      r.due = td;
+    }
+  }
+  return r;
+}
+
 function shuffle(a){
   for(let i = a.length - 1; i > 0; i--){
     const j = Math.floor(Math.random() * (i + 1));
     [a[i], a[j]] = [a[j], a[i]];
   }
+  return a;
 }
 
 /* ---------- 今日任务 ---------- */
@@ -633,11 +724,12 @@ function renderHome(){
   const due = dueWords().length;
   const t = S.days[todayStr()] || {};
   const wd = wrongDue().length;
+  const wrongN = wrongVocabWords().length;
   const tasks = [
     { name: `背新词 ${target} 个`, prog: `${doneNew}/${target}`, go: 'learn', btn: '去学' },
-    { name: '复习到期生词', prog: `${due} 个待复习`, go: 'review', btn: '去复习' },
-    { name: '单词测验 10 题', prog: t.quiz != null ? `已做：${t.quiz}/10` : '未做', go: 'quiz', btn: '去测验' },
-    { name: '刷真题', prog: `题库 ${QUESTIONS.length} 题`, go: 'drill', btn: '去刷题' },
+    { name: '主动复习生词', prog: due ? `${due} 个到期` : (wrongN ? `${wrongN} 个错词可刷` : '生词本/今日词/错词'), go: 'review', btn: '去复习' },
+    { name: '单词练习', prog: t.quiz != null ? `今日测验 ${t.quiz}/10` : '测验 · 默写 · 听写 · 填词', go: 'quiz', btn: '去练习' },
+    { name: '刷真题', prog: (() => { const dn = dueDrills().length; return `题库 ${QUESTIONS.length} 题` + (dn ? ` · 待重练 ${dn}` : ''); })(), go: 'drill', btn: '去刷题' },
     { name: '重做错题', prog: wd ? `${wd} 题待重做` : '无待重做', go: 'wrong', btn: '去错题本' }
   ];
   const ext = [
@@ -712,7 +804,7 @@ function startLearn(){
     document.getElementById('fcIpa').textContent = '';
     document.getElementById('fcPos').textContent = '今天的新词学完了';
     document.getElementById('fcMeaning').textContent = '';
-    document.getElementById('learnProgress').textContent = '可以去复习或做测验';
+    document.getElementById('learnProgress').textContent = '可以去主动复习或做练习';
     return;
   }
   showCard();
@@ -796,29 +888,52 @@ function markWord(known){
   }else showCard();
 }
 
-/* ---------- 测验 ---------- */
+/* ---------- 练习（测验 / 默写 / 听写 / 选词填空 / 听读） ---------- */
 let quizQ = [], quizI = 0, quizScore = 0, qShownAt = 0;
+let pracMode = '', pracLocked = false;
 
 function renderQuizHome(){
   const t = S.days[todayStr()] || {};
+  const due = dueWords().length;
+  const todayN = todayLearnedWords().length;
+  const wrongN = wrongVocabWords().length;
+  const learnN = learningWords().length;
   document.getElementById('quizBox').innerHTML = `
-    <h2>单词测验</h2>
-    <p class="note" style="margin-bottom:14px">从「今日新词 + 待复习生词」中抽 10 题，英译中/中译英混合。
-    ${t.quiz != null ? `<br>今天成绩：${t.quiz}/10，可再测一次。` : ''}</p>
-    <div class="center"><button class="btn big" onclick="startQuiz()">开始测验</button></div>`;
+    <h2>单词练习</h2>
+    <p class="note" style="margin-bottom:14px">从到期词、今日词、错词与生词本中抽题。
+    ${t.quiz != null ? `<br>今天选择题成绩：${t.quiz}/10。` : ''}
+    当前可练：到期 ${due} · 今日 ${todayN} · 错词 ${wrongN} · 生词 ${learnN}</p>
+    <div class="practice-grid">
+      <button type="button" class="practice-item" onclick="startQuiz()">
+        <div class="pi-title">选择题测验</div>
+        <div class="pi-meta">英译中 / 中译英四选一，10 题</div>
+      </button>
+      <button type="button" class="practice-item" onclick="startDict('dict')">
+        <div class="pi-title">中译英默写</div>
+        <div class="pi-meta">看中文写出英文，补再现短板</div>
+      </button>
+      <button type="button" class="practice-item" onclick="startDict('listen')">
+        <div class="pi-title">听写</div>
+        <div class="pi-meta">听发音写单词，可点提示看释义</div>
+      </button>
+      <button type="button" class="practice-item" onclick="startCloze()">
+        <div class="pi-title">选词填空</div>
+        <div class="pi-meta">语境挖空，四选一填入正确词</div>
+      </button>
+      <button type="button" class="practice-item" onclick="startReadAlong()">
+        <div class="pi-title">听读跟读</div>
+        <div class="pi-meta">听发音、跟读，巩固音形义</div>
+      </button>
+    </div>`;
 }
 
 function startQuiz(){
   if(!requireReady()) return;
-  let pool = [...new Set([...todayNewWords().map(v => v.w), ...dueWords().map(v => v.w)])];
-  if(pool.length < 10) pool = pool.concat(learningWords().map(v => v.w));
-  if(pool.length < 10) pool = pool.concat(VOCAB.slice(0, 200).map(v => v.w));
-  pool = [...new Set(pool)];
-  shuffle(pool);
-  quizQ = pool.slice(0, 10).map(w => {
-    const v = VOCAB.find(x => x.w === w);
+  pracMode = 'quiz';
+  const pool = practicePool('mix', 10);
+  quizQ = pool.map(v => {
     const en2cn = Math.random() < 0.6;
-    const distract = VOCAB.filter(x => x.w !== w);
+    const distract = VOCAB.filter(x => x.w !== v.w);
     shuffle(distract);
     const opts = [v, ...distract.slice(0, 3)];
     shuffle(opts);
@@ -837,6 +952,7 @@ function showQuizQ(){
   q.opts.forEach(o => {
     html += `<button class="opt" onclick="answerQuiz(this, ${o.w === q.v.w})">${q.en2cn ? esc(o.m) : esc(o.w)}</button>`;
   });
+  html += `<div class="row"><button class="btn ghost" onclick="renderQuizHome()">退出</button></div>`;
   box.innerHTML = html;
   qShownAt = now();
 }
@@ -851,7 +967,9 @@ function answerQuiz(el, correct){
     ok: correct ? 1 : 0, rt: Math.round(rt / 100) / 10
   });
   if(S.quizLog.length > 2000) S.quizLog = S.quizLog.slice(-2000);
+  ensureWordRecord(q.v, correct);
   logActivity();
+  save();
   el.classList.add(correct ? 'correct' : 'wrong');
   if(!correct){
     const label = q.en2cn ? q.v.m : q.v.w;
@@ -870,18 +988,246 @@ function answerQuiz(el, correct){
       document.getElementById('quizBox').innerHTML = `
         <h2>测验完成</h2>
         <p class="center" style="font-size:40px;margin:20px 0">${quizScore} / ${quizQ.length}</p>
-        <p class="center note">${quizScore >= 8 ? '很棒！' : quizScore >= 5 ? '继续加油，错题回生词本复习' : '别灰心，错词已记录，明天复习它们'}</p>
+        <p class="center note">${quizScore >= 8 ? '很棒！' : quizScore >= 5 ? '继续加油，错题可回生词本复习' : '别灰心，错词已记录，可去主动复习'}</p>
         <div class="row"><button class="btn" onclick="startQuiz()">再测一次</button>
-        <button class="btn ghost" onclick="goto('home')">返回</button></div>`;
+        <button class="btn ghost" onclick="renderQuizHome()">练习首页</button></div>`;
     }
   }, correct ? 400 : 1200);
 }
 
+function startDict(mode){
+  if(!requireReady()) return;
+  pracMode = mode === 'listen' ? 'listen' : 'dict';
+  const pool = practicePool(pracMode === 'listen' ? 'mix' : 'mix', 10);
+  if(!pool.length){ alert('暂无可练单词，先去学几个新词吧'); return; }
+  quizQ = pool.map(v => ({ v }));
+  quizI = 0;
+  quizScore = 0;
+  pracLocked = false;
+  showDictQ();
+}
+
+function showDictQ(){
+  const q = quizQ[quizI];
+  const v = q.v;
+  const isListen = pracMode === 'listen';
+  const box = document.getElementById('quizBox');
+  box.innerHTML = `
+    <div class="qhead">第 ${quizI + 1} / ${quizQ.length} 题 · ${isListen ? '听写' : '中译英默写'}</div>
+    ${isListen
+      ? `<div class="center" style="margin:18px 0">
+           <button class="btn big" type="button" onclick="speakText(decodeURIComponent('${encodeURIComponent(v.w)}'))">🔊 播放发音</button>
+           <p style="margin-top:10px"><button type="button" class="hint-btn" onclick="toggleListenHint()">看释义提示</button></p>
+           <p class="note" id="listenHint" style="display:none;margin-top:6px">${esc(v.m)} <span style="color:#bbb">${esc(v.pos || '')}</span></p>
+         </div>`
+      : `<div class="qword">${esc(v.m)}</div>
+         <p class="note" style="margin-bottom:8px">${esc(v.pos || '')} · 写出对应英文单词</p>`}
+    <input class="dict-input" id="dictInput" type="text" autocomplete="off" autocapitalize="off" spellcheck="false"
+      placeholder="${isListen ? '听后输入英文单词' : '输入英文单词'}"
+      onkeydown="if(event.key==='Enter'){event.preventDefault();submitDict();}">
+    <div class="dict-feedback" id="dictFb"></div>
+    <div class="row">
+      <button class="btn big" type="button" id="dictSubmit" onclick="submitDict()">提交</button>
+      <button class="btn ghost" type="button" onclick="renderQuizHome()">退出</button>
+    </div>`;
+  qShownAt = now();
+  pracLocked = false;
+  const input = document.getElementById('dictInput');
+  if(input) input.focus();
+  if(isListen) setTimeout(() => speakText(v.w), 200);
+}
+
+function toggleListenHint(){
+  const el = document.getElementById('listenHint');
+  if(el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
+}
+
+function submitDict(){
+  if(!requireReady() || pracLocked) return;
+  const q = quizQ[quizI];
+  if(!q) return;
+  const input = document.getElementById('dictInput');
+  const raw = input ? input.value : '';
+  if(!String(raw).trim()){
+    if(input) input.focus();
+    return;
+  }
+  pracLocked = true;
+  const ok = ansMatch(raw, q.v.w);
+  const rt = now() - qShownAt;
+  (S.quizLog = S.quizLog || []).push({
+    d: todayStr(), w: q.v.w, dir: pracMode,
+    ok: ok ? 1 : 0, rt: Math.round(rt / 100) / 10
+  });
+  if(S.quizLog.length > 2000) S.quizLog = S.quizLog.slice(-2000);
+  ensureWordRecord(q.v, ok);
+  logActivity();
+  save();
+  if(ok) quizScore++;
+  const fb = document.getElementById('dictFb');
+  if(fb){
+    fb.className = 'dict-feedback ' + (ok ? 'ok' : 'bad');
+    fb.textContent = ok ? '正确！' : `正确答案：${q.v.w}`;
+  }
+  if(input) input.disabled = true;
+  const btn = document.getElementById('dictSubmit');
+  if(btn) btn.disabled = true;
+  setTimeout(() => {
+    quizI++;
+    if(quizI < quizQ.length) showDictQ();
+    else finishPractice(pracMode === 'listen' ? '听写' : '默写');
+  }, ok ? 500 : 1400);
+}
+
+function startCloze(){
+  if(!requireReady()) return;
+  pracMode = 'cloze';
+  const pool = practicePool('mix', 10);
+  if(!pool.length){ alert('暂无可练单词，先去学几个新词吧'); return; }
+  quizQ = pool.map(v => {
+    const distract = VOCAB.filter(x => x.w !== v.w);
+    shuffle(distract);
+    const opts = [v, ...distract.slice(0, 3)];
+    shuffle(opts);
+    return { v, opts, sent: clozeSentence(v) };
+  });
+  quizI = 0;
+  quizScore = 0;
+  showClozeQ();
+}
+
+function showClozeQ(){
+  const q = quizQ[quizI];
+  const box = document.getElementById('quizBox');
+  let html = `<div class="qhead">第 ${quizI + 1} / ${quizQ.length} 题 · 选词填空</div>
+    <div class="cloze-sent">${esc(q.sent).replace('______', '<span class="cloze-blank">______</span>')}</div>
+    <p class="note" style="margin-bottom:12px">提示：${esc(q.v.m)} <span style="color:#bbb">${esc(q.v.pos || '')}</span></p>`;
+  q.opts.forEach(o => {
+    html += `<button class="opt" onclick="answerCloze(this, ${o.w === q.v.w})">${esc(o.w)}</button>`;
+  });
+  html += `<div class="row"><button class="btn ghost" onclick="renderQuizHome()">退出</button></div>`;
+  box.innerHTML = html;
+  qShownAt = now();
+}
+
+function answerCloze(el, correct){
+  if(!requireReady()) return;
+  document.querySelectorAll('.opt').forEach(b => { b.disabled = true; });
+  const q = quizQ[quizI];
+  const rt = now() - qShownAt;
+  (S.quizLog = S.quizLog || []).push({
+    d: todayStr(), w: q.v.w, dir: 'cloze',
+    ok: correct ? 1 : 0, rt: Math.round(rt / 100) / 10
+  });
+  if(S.quizLog.length > 2000) S.quizLog = S.quizLog.slice(-2000);
+  ensureWordRecord(q.v, correct);
+  logActivity();
+  save();
+  el.classList.add(correct ? 'correct' : 'wrong');
+  if(!correct){
+    document.querySelectorAll('.opt').forEach(b => {
+      if(b.textContent === q.v.w) b.classList.add('correct');
+    });
+  }
+  if(correct) quizScore++;
+  setTimeout(() => {
+    quizI++;
+    if(quizI < quizQ.length) showClozeQ();
+    else finishPractice('选词填空');
+  }, correct ? 400 : 1200);
+}
+
+function startReadAlong(){
+  if(!requireReady()) return;
+  pracMode = 'read';
+  const pool = practicePool('mix', 12);
+  if(!pool.length){ alert('暂无可练单词，先去学几个新词吧'); return; }
+  quizQ = pool.map(v => ({ v }));
+  quizI = 0;
+  quizScore = 0;
+  showReadQ();
+}
+
+function showReadQ(){
+  const q = quizQ[quizI];
+  const v = q.v;
+  document.getElementById('quizBox').innerHTML = `
+    <div class="qhead">听读跟读 · ${quizI + 1} / ${quizQ.length}</div>
+    <div class="flashcard revealed" style="cursor:default">
+      <div class="word">${esc(v.w)}</div>
+      <div class="ipa">${esc(v.ipa || '')}</div>
+      <div class="pos">${esc(v.pos || '')}</div>
+      <div class="meaning" style="display:block">${esc(v.m)}</div>
+    </div>
+    <div class="row" style="margin-top:14px">
+      <button class="btn big ghost" type="button" onclick="speakText(decodeURIComponent('${encodeURIComponent(v.w)}'))">再听一遍</button>
+      <button class="btn big" type="button" onclick="nextRead()">下一个</button>
+    </div>
+    <div class="row"><button class="btn ghost" onclick="renderQuizHome()">退出</button></div>`;
+  qShownAt = now();
+  setTimeout(() => speakText(v.w), 150);
+}
+
+function nextRead(){
+  if(!requireReady()) return;
+  const q = quizQ[quizI];
+  if(q){
+    (S.quizLog = S.quizLog || []).push({
+      d: todayStr(), w: q.v.w, dir: 'read', ok: 1, rt: Math.round((now() - qShownAt) / 100) / 10
+    });
+    if(S.quizLog.length > 2000) S.quizLog = S.quizLog.slice(-2000);
+    logActivity();
+    save();
+    quizScore++;
+  }
+  quizI++;
+  if(quizI < quizQ.length) showReadQ();
+  else finishPractice('听读跟读');
+}
+
+function finishPractice(title){
+  document.getElementById('quizBox').innerHTML = `
+    <h2>${esc(title)}完成</h2>
+    <p class="center" style="font-size:40px;margin:20px 0">${quizScore} / ${quizQ.length}</p>
+    <p class="center note">${quizScore >= Math.ceil(quizQ.length * 0.8) ? '很棒！' : '错词已记入，可去「生词」主动复习'}</p>
+    <div class="row">
+      <button class="btn" onclick="renderQuizHome()">练习首页</button>
+      <button class="btn ghost" onclick="goto('review')">去复习</button>
+    </div>`;
+}
+
 /* ---------- 复习 ---------- */
-let revQueue = [], revIdx = 0, revShownAt = 0;
+let revQueue = [], revIdx = 0, revShownAt = 0, revSrc = 'due';
 
 function renderReview(){
-  document.getElementById('dueCount').textContent = dueWords().length;
+  const due = dueWords().length;
+  const learnN = learningWords().length;
+  const todayN = todayLearnedWords().length;
+  const wrongN = wrongVocabWords().length;
+  const home = document.getElementById('reviewHome');
+  const card = document.getElementById('reviewCard');
+  if(home) home.classList.remove('hidden');
+  if(card) card.classList.add('hidden');
+  const modes = document.getElementById('reviewModes');
+  if(modes){
+    modes.innerHTML = `
+      <button type="button" class="practice-item" onclick="startReview('due')">
+        <div class="pi-title">到期复习</div>
+        <div class="pi-meta">${due} 个今天该复习</div>
+      </button>
+      <button type="button" class="practice-item" onclick="startReview('learning')">
+        <div class="pi-title">生词本全部</div>
+        <div class="pi-meta">${learnN} 个复习中</div>
+      </button>
+      <button type="button" class="practice-item" onclick="startReview('today')">
+        <div class="pi-title">今日学过</div>
+        <div class="pi-meta">${todayN} 个今天接触过</div>
+      </button>
+      <button type="button" class="practice-item" onclick="startReview('wrong')">
+        <div class="pi-title">错词复习</div>
+        <div class="pi-meta">${wrongN} 个测验/练习错过</div>
+      </button>`;
+  }
   const lw = learningWords();
   document.getElementById('learnCount').textContent = lw.length;
   document.getElementById('allLearning').innerHTML = lw.map(v => {
@@ -891,13 +1237,35 @@ function renderReview(){
   }).join('') || '<tr><td class="note">还没有生词，去学新词时标记「不认识」就会进这里</td></tr>';
 }
 
-function startReview(){
+function startReview(src){
   if(!requireReady()) return;
-  revQueue = dueWords();
+  revSrc = src || 'due';
+  if(revSrc === 'due') revQueue = dueWords();
+  else if(revSrc === 'learning') revQueue = learningWords().slice();
+  else if(revSrc === 'today') revQueue = todayLearnedWords();
+  else if(revSrc === 'wrong') revQueue = wrongVocabWords();
+  else revQueue = dueWords();
+  if(revSrc !== 'due') shuffle(revQueue);
   revIdx = 0;
-  if(!revQueue.length){ alert('今天没有到期复习的词 🎉'); return; }
+  if(!revQueue.length){
+    const tip = {
+      due: '今天没有到期词，可刷生词本、今日词或错词',
+      learning: '生词本还是空的，先去学新词并标记「不认识」',
+      today: '今天还没学过词，先去「学单词」',
+      wrong: '暂无错词记录，先去做练习'
+    };
+    alert(tip[revSrc] || '暂无可复习单词');
+    return;
+  }
+  document.getElementById('reviewHome').classList.add('hidden');
   document.getElementById('reviewCard').classList.remove('hidden');
   showRev();
+}
+
+function stopReview(){
+  document.getElementById('reviewCard').classList.add('hidden');
+  document.getElementById('reviewHome').classList.remove('hidden');
+  renderReview();
 }
 
 function showRev(){
@@ -907,69 +1275,166 @@ function showRev(){
   document.getElementById('rIpa').textContent = v.ipa || '';
   document.getElementById('rPos').textContent = v.pos || '';
   document.getElementById('rMeaning').textContent = v.m;
+  const prog = document.getElementById('revProgress');
+  if(prog) prog.textContent = `复习 ${revIdx + 1} / ${revQueue.length}`;
   revShownAt = now();
 }
 
 function reviewAnswer(remember){
   if(!requireReady()) return;
   const v = revQueue[revIdx];
-  const r = S.words[v.w];
+  let r = S.words[v.w];
+  if(!r) r = ensureWordRecord(v, remember);
   const rt = now() - revShownAt;
   const q = quality(rt, remember);
   recordHist(r, q, rt);
   sm2(r, q);
-  r.n++;
+  r.n = (r.n || 0) + 1;
   logActivity();
   save();
   revIdx++;
   if(revIdx >= revQueue.length){
     document.getElementById('reviewCard').classList.add('hidden');
+    document.getElementById('reviewHome').classList.remove('hidden');
     alert('复习完成！');
     renderReview();
   }else showRev();
 }
 
+/* ---------- 刷题进度 / 记忆曲线 ---------- */
+function ensureDrillProg(){
+  if(!S.drillProg || typeof S.drillProg !== 'object') S.drillProg = {};
+  return S.drillProg;
+}
+
+function recordDrill(qid, correct){
+  const dp = ensureDrillProg();
+  const td = todayStr();
+  let r = dp[qid];
+  if(!r) r = dp[qid] = { n: 0, ok: 0, lastOk: 0, lastAt: 0, stage: 0, due: '' };
+  r.n++;
+  if(correct) r.ok++;
+  r.lastOk = correct ? 1 : 0;
+  r.lastAt = now();
+  if(correct){
+    r.stage = (r.stage || 0) + 1;
+    r.due = r.stage >= REVIEW_IV.length ? '' : addDays(td, REVIEW_IV[r.stage]);
+  }else{
+    r.stage = 0;
+    r.due = addDays(td, 1);
+  }
+  return r;
+}
+
+function drillStat(qid){
+  const r = (S.drillProg || {})[qid];
+  if(!r) return null;
+  return {
+    n: r.n, ok: r.ok,
+    acc: r.n ? Math.round(r.ok / r.n * 100) : 0,
+    lastOk: r.lastOk, due: r.due || '', stage: r.stage || 0,
+    cleared: (r.stage || 0) >= REVIEW_IV.length
+  };
+}
+
+function dueDrills(){
+  const td = todayStr();
+  return QUESTIONS.filter(q => {
+    const s = drillStat(q.id);
+    return s && !s.cleared && s.due && s.due <= td;
+  }).sort((a, b) => cmpDate(drillStat(a.id).due, drillStat(b.id).due));
+}
+
+function srcList(){
+  const bySrc = {};
+  QUESTIONS.forEach(q => { (bySrc[q.src] = bySrc[q.src] || []).push(q); });
+  return Object.keys(bySrc).sort().map(src => {
+    const qs = bySrc[src];
+    let done = 0, ok = 0, dueN = 0;
+    const td = todayStr();
+    qs.forEach(q => {
+      const s = drillStat(q.id);
+      if(s){
+        done++;
+        ok += s.ok ? 1 : 0;
+        if(!s.cleared && s.due && s.due <= td) dueN++;
+      }
+    });
+    return { src, total: qs.length, done, ok, acc: done ? Math.round(ok / done * 100) : 0, dueN };
+  });
+}
+
 /* ---------- 刷真题 ---------- */
 let drillQ = [], drillI = 0, drillScore = 0, drillWrong = [], drillShownAt = 0, drillMode = '';
 
+// 套卷列表首页：今日待重练 + 按套卷 + 按题型 + 全部混合
 function renderDrillHome(){
+  const due = dueDrills();
+  const srcs = srcList();
   const parts = [...new Set(QUESTIONS.map(q => q.part))];
-  const bySrc = {};
-  QUESTIONS.forEach(q => { bySrc[q.src] = (bySrc[q.src] || 0) + 1; });
-  const srcNote = Object.entries(bySrc).map(([k, v]) => `${k} ${v}题`).join(' · ');
-  const byPart = parts.map(p => {
+  let html = `<h2>刷真题（${QUESTIONS.length} 题）</h2>`;
+  html += `<div class="study-mod" onclick="startDueDrill()">
+    <div><div class="sm-title">今日待重练</div>
+    <div class="sm-meta">按记忆曲线该重做的题</div></div>
+    <div class="sm-prog"><div class="num" style="font-size:22px;color:#8b5e3c">${due.length}</div>
+    <div class="note">${due.length ? '去重练 ›' : '无'}</div></div></div>`;
+  html += `<h2 style="font-size:15px;margin-top:14px">按套卷</h2>`;
+  srcs.forEach(s => {
+    const pct = s.total ? Math.round(s.done / s.total * 100) : 0;
+    html += `<div class="study-mod" onclick="openDrillSrc('${encodeURIComponent(s.src)}')">
+      <div><div class="sm-title">${esc(s.src)}</div>
+      <div class="sm-meta">${s.total} 题 · 已做 ${s.done} · 正确率 ${s.acc}%${s.dueN ? ' · <span style="color:#e57373">待重练 ' + s.dueN + '</span>' : ''}</div></div>
+      <div class="sm-prog"><div class="note">${s.done}/${s.total}</div>
+      <div class="progress"><div style="width:${pct}%"></div></div></div></div>`;
+  });
+  html += `<h2 style="font-size:15px;margin-top:14px">按题型</h2>`;
+  parts.forEach(p => {
     const qs = QUESTIONS.filter(q => q.part === p);
-    return `<div class="task"><div>${esc(p)}<div class="note">${qs.length} 题</div></div>
-      <button class="btn" onclick="startDrill(decodeURIComponent('${encodeURIComponent(p)}'))">开始</button></div>`;
-  }).join('');
-  const srcButtons = Object.keys(bySrc).map(s =>
-    `<button class="btn ghost" style="margin:4px" onclick="startDrillSrc('${encodeURIComponent(s)}')">${esc(s)}（${bySrc[s]}）</button>`
-  ).join('');
-  document.getElementById('drillBox').innerHTML = `
-    <h2>刷真题（${QUESTIONS.length} 题）</h2>
+    html += `<div class="task"><div>${esc(p)}<div class="note">${qs.length} 题</div></div>
+      <button class="btn" onclick="startDrill('${encodeURIComponent(p)}')">开始</button></div>`;
+  });
+  html += `<div class="task"><div>全部混合练习</div><button class="btn" onclick="startDrill('')">开始</button></div>`;
+  document.getElementById('drillBox').innerHTML = html;
+}
+
+// 套卷模式选择视图：四种模式 + 题目列表
+function openDrillSrc(enc){
+  const src = decodeURIComponent(enc);
+  const qs = QUESTIONS.filter(q => q.src === src);
+  const notDone = qs.filter(q => !drillStat(q.id)).length;
+  const wrongN = qs.filter(q => { const s = drillStat(q.id); return s && s.ok < s.n; }).length;
+  let html = `<h2>${esc(src)}</h2>
     <p class="note" style="margin-bottom:12px">
-      <b>已入库：</b>${esc(srcNote)}。<br>
-      题型：完成对话 / 阅读理解 / 词汇语法。翻译与作文请在「资料」打开 PDF。<br>
-      湖南 2021 真题与全真模拟卷为扫描件，暂未全部自动入库，可在「资料」看原卷。
-    </p>
-    ${byPart}
-    <div class="task"><div>全部混合练习</div><button class="btn" onclick="startDrill('')">开始</button></div>
-    <h2 style="font-size:15px;margin-top:16px">按来源练习</h2>
-    <div>${srcButtons}</div>`;
+      <a href="javascript:renderDrillHome()" style="color:#8b5e3c">‹ 返回套卷列表</a>
+      　共 ${qs.length} 题 · 未做 ${notDone} · 曾错 ${wrongN}</p>
+    <div class="task"><div>顺序做<div class="note">按原题号从第 1 题开始</div></div>
+      <button class="btn" onclick="startDrillSeq('${enc}')">开始</button></div>
+    <div class="task"><div>只做没做过的<div class="note">${notDone} 题</div></div>
+      <button class="btn" onclick="startDrillNew('${enc}')">开始</button></div>
+    <div class="task"><div>只做做错的<div class="note">${wrongN} 题</div></div>
+      <button class="btn" onclick="startDrillWrong('${enc}')">开始</button></div>
+    <div class="task"><div>重做整套<div class="note">从头再过一遍（保留历史）</div></div>
+      <button class="btn" onclick="startDrillSeq('${enc}')">开始</button></div>
+    <h2 style="font-size:15px;margin-top:14px">题目列表（点「练」单题练习）</h2>`;
+  qs.forEach((q, i) => {
+    const s = drillStat(q.id);
+    const badge = !s ? '<span class="note">未做</span>'
+      : s.cleared ? '<span style="color:#4caf50">已巩固</span>'
+      : (s.lastOk ? '<span style="color:#4caf50">对</span>' : '<span style="color:#e57373">错</span>');
+    html += `<div class="task"><div style="flex:1">第 ${i + 1} 题 <span class="note">${esc(q.part)}</span> ${badge}</div>
+      <button class="btn ghost" onclick="startSingleDrill('${esc(q.id)}')">练</button></div>`;
+  });
+  document.getElementById('drillBox').innerHTML = html;
 }
 
 function startDrill(part){
   if(!requireReady()) return;
+  part = part ? decodeURIComponent(part) : '';
   drillMode = part;
   drillQ = part ? QUESTIONS.filter(q => q.part === part) : QUESTIONS.slice();
   shuffle(drillQ);
-  drillI = 0;
-  drillScore = 0;
-  drillWrong = [];
-  if(!drillQ.length){
-    alert('题库为空');
-    return;
-  }
+  drillI = 0; drillScore = 0; drillWrong = [];
+  if(!drillQ.length){ alert('题库为空'); return; }
   showDrillQ();
 }
 
@@ -982,6 +1447,43 @@ function startDrillSrc(enc){
   drillI = 0; drillScore = 0; drillWrong = [];
   if(!drillQ.length){ alert('该来源暂无题目'); return; }
   showDrillQ();
+}
+
+// 四种练习模式 + 单题练习的公共装填函数
+function _beginDrill(list, mode, ordered){
+  if(!requireReady()) return;
+  goto('drill');   // 切到刷真题 tab，否则 showDrillQ 渲染进隐藏容器看不到
+  drillMode = mode;
+  drillQ = list.slice();
+  if(!ordered) shuffle(drillQ);
+  drillI = 0; drillScore = 0; drillWrong = [];
+  if(!drillQ.length){ alert('该模式下暂无题目'); renderDrillHome(); return; }
+  showDrillQ();
+}
+
+function startDrillSeq(enc){
+  const src = decodeURIComponent(enc);
+  _beginDrill(QUESTIONS.filter(q => q.src === src), 'seq:' + src, true);
+}
+function startDrillNew(enc){
+  const src = decodeURIComponent(enc);
+  _beginDrill(QUESTIONS.filter(q => q.src === src && !drillStat(q.id)), 'new:' + src, false);
+}
+function startDrillWrong(enc){
+  const src = decodeURIComponent(enc);
+  _beginDrill(QUESTIONS.filter(q => { const s = drillStat(q.id); return q.src === src && s && s.ok < s.n; }), 'wrong2:' + src, false);
+}
+function startDueDrill(){
+  if(!requireReady()) return;
+  const due = dueDrills();
+  if(!due.length){ alert('今天没有待重练的题'); return; }
+  _beginDrill(due, 'due', true);
+}
+function startSingleDrill(qid){
+  if(!requireReady()) return;
+  const q = QUESTIONS.find(x => x.id === qid);
+  if(!q){ alert('题目不存在'); return; }
+  _beginDrill([q], 'single', true);
 }
 
 function showDrillQ(){
@@ -1010,6 +1512,7 @@ function answerDrill(el, chosen){
   if(correct) drillScore++;
   else drillWrong.push(q.id);
   recordWrong(q, chosen, correct);
+  recordDrill(q.id, correct);   // 新增：进度 + 记忆曲线
   logActivity();
   save();
   document.getElementById('drillExp').innerHTML = `
@@ -1022,16 +1525,22 @@ function answerDrill(el, chosen){
 
 function nextDrill(){
   drillI++;
-  if(drillI < drillQ.length) showDrillQ();
-  else{
-    const backWrong = drillMode === 'wrong';
-    document.getElementById('drillBox').innerHTML = `
-      <h2>练习完成</h2>
-      <p class="center" style="font-size:40px;margin:16px 0">${drillScore} / ${drillQ.length}</p>
-      <p class="center note">${drillWrong.length ? '错 ' + drillWrong.length + ' 题，已存入错题本，记得回来重做' : '全对！太棒了 🎉'}</p>
-      <div class="row"><button class="btn" onclick="${backWrong ? 'goto(\'wrong\')' : 'renderDrillHome()'}">${backWrong ? '回错题本' : '再练'}</button>
-      <button class="btn ghost" onclick="goto('wrong')">看错题本</button></div>`;
-  }
+  if(drillI < drillQ.length){ showDrillQ(); return; }
+  const m = drillMode;
+  let back;
+  if(m === 'wrong') back = `goto('wrong')`;
+  else if(m === 'single') back = 'renderDrillHome()';
+  else if(m === 'due') back = 'renderDrillHome()';
+  else if(m.indexOf('seq:') === 0 || m.indexOf('new:') === 0 || m.indexOf('wrong2:') === 0)
+    back = `openDrillSrc('${encodeURIComponent(m.split(':').slice(1).join(':'))}')`;
+  else back = 'renderDrillHome()';
+  const backLabel = m === 'wrong' ? '回错题本' : '返回';
+  document.getElementById('drillBox').innerHTML = `
+    <h2>练习完成</h2>
+    <p class="center" style="font-size:40px;margin:16px 0">${drillScore} / ${drillQ.length}</p>
+    <p class="center note">${drillWrong.length ? '错 ' + drillWrong.length + ' 题，已存入错题本' : '全对！太棒了 🎉'}</p>
+    <div class="row"><button class="btn" onclick="${back}">${backLabel}</button>
+    <button class="btn ghost" onclick="renderDrillHome()">套卷列表</button></div>`;
 }
 
 function recordWrong(q, chosen, correct){
@@ -1082,7 +1591,8 @@ function renderWrong(){
   html += all.map(x => `<div class="task ${x.r.cleared ? 'done' : ''}">
     <div style="flex:1"><div>${esc(x.q.part)} · ${esc(x.q.src)}</div>
     <div class="note">错 ${x.r.times} 次${x.r.cleared ? ' · 已攻克' : ' · ' + (x.r.due <= todayStr() ? '今日重做' : esc(x.r.due) + ' 重做')}</div></div>
-    <button class="btn ghost" onclick="previewWrong('${esc(x.q.id)}')">看题</button></div>`).join('')
+    <button class="btn ghost" onclick="previewWrong('${esc(x.q.id)}')">看题</button>
+    <button class="btn ghost" onclick="startSingleDrill('${esc(x.q.id)}')">重练</button></div>`).join('')
     || '<p class="note">还没有错题，去刷真题吧</p>';
   html += `<div id="wrongPreview"></div>`;
   document.getElementById('wrongBox').innerHTML = html;
@@ -1358,7 +1868,13 @@ function renderStats(){
   const log = S.quizLog || [];
   const byDir = {};
   log.forEach(l => {
-    const k = l.dir === 'e2c' ? '英 → 中' : '中 → 英';
+    const k = l.dir === 'e2c' ? '英 → 中'
+      : l.dir === 'c2e' ? '中 → 英'
+      : l.dir === 'dict' ? '默写'
+      : l.dir === 'listen' ? '听写'
+      : l.dir === 'cloze' ? '选词填空'
+      : l.dir === 'read' ? '听读'
+      : String(l.dir || '其他');
     byDir[k] = byDir[k] || [0, 0];
     byDir[k][1]++;
     byDir[k][0] += l.ok;
