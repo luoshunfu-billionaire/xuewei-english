@@ -1429,16 +1429,12 @@ function openDrillSrc(enc){
 
 function startDrill(part){
   if(!requireReady()) return;
+  part = part ? decodeURIComponent(part) : '';
   drillMode = part;
   drillQ = part ? QUESTIONS.filter(q => q.part === part) : QUESTIONS.slice();
   shuffle(drillQ);
-  drillI = 0;
-  drillScore = 0;
-  drillWrong = [];
-  if(!drillQ.length){
-    alert('题库为空');
-    return;
-  }
+  drillI = 0; drillScore = 0; drillWrong = [];
+  if(!drillQ.length){ alert('题库为空'); return; }
   showDrillQ();
 }
 
@@ -1451,6 +1447,42 @@ function startDrillSrc(enc){
   drillI = 0; drillScore = 0; drillWrong = [];
   if(!drillQ.length){ alert('该来源暂无题目'); return; }
   showDrillQ();
+}
+
+// 四种练习模式 + 单题练习的公共装填函数
+function _beginDrill(list, mode, ordered){
+  if(!requireReady()) return;
+  drillMode = mode;
+  drillQ = list.slice();
+  if(!ordered) shuffle(drillQ);
+  drillI = 0; drillScore = 0; drillWrong = [];
+  if(!drillQ.length){ alert('该模式下暂无题目'); renderDrillHome(); return; }
+  showDrillQ();
+}
+
+function startDrillSeq(enc){
+  const src = decodeURIComponent(enc);
+  _beginDrill(QUESTIONS.filter(q => q.src === src), 'seq:' + src, true);
+}
+function startDrillNew(enc){
+  const src = decodeURIComponent(enc);
+  _beginDrill(QUESTIONS.filter(q => q.src === src && !drillStat(q.id)), 'new:' + src, false);
+}
+function startDrillWrong(enc){
+  const src = decodeURIComponent(enc);
+  _beginDrill(QUESTIONS.filter(q => { const s = drillStat(q.id); return q.src === src && s && s.ok < s.n; }), 'wrong2:' + src, false);
+}
+function startDueDrill(){
+  if(!requireReady()) return;
+  const due = dueDrills();
+  if(!due.length){ alert('今天没有待重练的题'); return; }
+  _beginDrill(due, 'due', true);
+}
+function startSingleDrill(qid){
+  if(!requireReady()) return;
+  const q = QUESTIONS.find(x => x.id === qid);
+  if(!q){ alert('题目不存在'); return; }
+  _beginDrill([q], 'single', true);
 }
 
 function showDrillQ(){
@@ -1479,6 +1511,7 @@ function answerDrill(el, chosen){
   if(correct) drillScore++;
   else drillWrong.push(q.id);
   recordWrong(q, chosen, correct);
+  recordDrill(q.id, correct);   // 新增：进度 + 记忆曲线
   logActivity();
   save();
   document.getElementById('drillExp').innerHTML = `
@@ -1491,16 +1524,22 @@ function answerDrill(el, chosen){
 
 function nextDrill(){
   drillI++;
-  if(drillI < drillQ.length) showDrillQ();
-  else{
-    const backWrong = drillMode === 'wrong';
-    document.getElementById('drillBox').innerHTML = `
-      <h2>练习完成</h2>
-      <p class="center" style="font-size:40px;margin:16px 0">${drillScore} / ${drillQ.length}</p>
-      <p class="center note">${drillWrong.length ? '错 ' + drillWrong.length + ' 题，已存入错题本，记得回来重做' : '全对！太棒了 🎉'}</p>
-      <div class="row"><button class="btn" onclick="${backWrong ? 'goto(\'wrong\')' : 'renderDrillHome()'}">${backWrong ? '回错题本' : '再练'}</button>
-      <button class="btn ghost" onclick="goto('wrong')">看错题本</button></div>`;
-  }
+  if(drillI < drillQ.length){ showDrillQ(); return; }
+  const m = drillMode;
+  let back;
+  if(m === 'wrong') back = `goto('wrong')`;
+  else if(m === 'single') back = 'renderDrillHome()';
+  else if(m === 'due') back = 'renderDrillHome()';
+  else if(m.indexOf('seq:') === 0 || m.indexOf('new:') === 0 || m.indexOf('wrong2:') === 0)
+    back = `openDrillSrc('${encodeURIComponent(m.split(':').slice(1).join(':'))}')`;
+  else back = 'renderDrillHome()';
+  const backLabel = m === 'wrong' ? '回错题本' : '返回';
+  document.getElementById('drillBox').innerHTML = `
+    <h2>练习完成</h2>
+    <p class="center" style="font-size:40px;margin:16px 0">${drillScore} / ${drillQ.length}</p>
+    <p class="center note">${drillWrong.length ? '错 ' + drillWrong.length + ' 题，已存入错题本' : '全对！太棒了 🎉'}</p>
+    <div class="row"><button class="btn" onclick="${back}">${backLabel}</button>
+    <button class="btn ghost" onclick="renderDrillHome()">套卷列表</button></div>`;
 }
 
 function recordWrong(q, chosen, correct){

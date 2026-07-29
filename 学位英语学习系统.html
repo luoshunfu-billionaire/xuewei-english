@@ -46,7 +46,7 @@
 <nav>
   <button data-tab="home" class="active">今日</button>
   <button data-tab="learn">学单词</button>
-  <button data-tab="quiz">测验</button>
+  <button data-tab="quiz">练习</button>
   <button data-tab="drill">刷真题</button>
   <button data-tab="study">复习资料</button>
   <button data-tab="wrong">错题</button>
@@ -106,12 +106,14 @@
   </div>
 
   <div id="tab-review" class="hidden">
-    <div class="card">
-      <h2>今日待复习（<span id="dueCount">0</span>）</h2>
-      <p class="note" style="margin-bottom:10px">凭第一反应作答；「记得」间隔变长，「忘了」会缩短</p>
-      <div class="row"><button class="btn" onclick="startReview()">开始复习</button></div>
+    <div class="card" id="reviewHome">
+      <h2>主动复习</h2>
+      <p class="note" style="margin-bottom:12px">不必等到期，可随时刷生词本、今日词或错词</p>
+      <div class="practice-grid" id="reviewModes"></div>
+      <p class="note" style="margin-top:12px">凭第一反应作答；「记得」间隔变长，「忘了」会缩短</p>
     </div>
     <div class="card hidden" id="reviewCard">
+      <div class="qhead" id="revProgress"></div>
       <div class="flashcard" id="rFlash" onclick="document.getElementById('rFlash').classList.add('revealed')">
         <div class="word" id="rWord"></div>
         <div class="ipa" id="rIpa"></div>
@@ -123,6 +125,7 @@
         <button class="btn big ghost" onclick="reviewAnswer(false)">忘了</button>
         <button class="btn big" onclick="reviewAnswer(true)">记得</button>
       </div>
+      <div class="row"><button class="btn ghost" onclick="stopReview()">结束本次</button></div>
     </div>
     <div class="card">
       <h2>全部生词（<span id="learnCount">0</span>）</h2>
