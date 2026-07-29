@@ -1367,30 +1367,64 @@ function srcList(){
 /* ---------- 刷真题 ---------- */
 let drillQ = [], drillI = 0, drillScore = 0, drillWrong = [], drillShownAt = 0, drillMode = '';
 
+// 套卷列表首页：今日待重练 + 按套卷 + 按题型 + 全部混合
 function renderDrillHome(){
+  const due = dueDrills();
+  const srcs = srcList();
   const parts = [...new Set(QUESTIONS.map(q => q.part))];
-  const bySrc = {};
-  QUESTIONS.forEach(q => { bySrc[q.src] = (bySrc[q.src] || 0) + 1; });
-  const srcNote = Object.entries(bySrc).map(([k, v]) => `${k} ${v}题`).join(' · ');
-  const byPart = parts.map(p => {
+  let html = `<h2>刷真题（${QUESTIONS.length} 题）</h2>`;
+  html += `<div class="study-mod" onclick="startDueDrill()">
+    <div><div class="sm-title">今日待重练</div>
+    <div class="sm-meta">按记忆曲线该重做的题</div></div>
+    <div class="sm-prog"><div class="num" style="font-size:22px;color:#8b5e3c">${due.length}</div>
+    <div class="note">${due.length ? '去重练 ›' : '无'}</div></div></div>`;
+  html += `<h2 style="font-size:15px;margin-top:14px">按套卷</h2>`;
+  srcs.forEach(s => {
+    const pct = s.total ? Math.round(s.done / s.total * 100) : 0;
+    html += `<div class="study-mod" onclick="openDrillSrc('${encodeURIComponent(s.src)}')">
+      <div><div class="sm-title">${esc(s.src)}</div>
+      <div class="sm-meta">${s.total} 题 · 已做 ${s.done} · 正确率 ${s.acc}%${s.dueN ? ' · <span style="color:#e57373">待重练 ' + s.dueN + '</span>' : ''}</div></div>
+      <div class="sm-prog"><div class="note">${s.done}/${s.total}</div>
+      <div class="progress"><div style="width:${pct}%"></div></div></div></div>`;
+  });
+  html += `<h2 style="font-size:15px;margin-top:14px">按题型</h2>`;
+  parts.forEach(p => {
     const qs = QUESTIONS.filter(q => q.part === p);
-    return `<div class="task"><div>${esc(p)}<div class="note">${qs.length} 题</div></div>
-      <button class="btn" onclick="startDrill(decodeURIComponent('${encodeURIComponent(p)}'))">开始</button></div>`;
-  }).join('');
-  const srcButtons = Object.keys(bySrc).map(s =>
-    `<button class="btn ghost" style="margin:4px" onclick="startDrillSrc('${encodeURIComponent(s)}')">${esc(s)}（${bySrc[s]}）</button>`
-  ).join('');
-  document.getElementById('drillBox').innerHTML = `
-    <h2>刷真题（${QUESTIONS.length} 题）</h2>
+    html += `<div class="task"><div>${esc(p)}<div class="note">${qs.length} 题</div></div>
+      <button class="btn" onclick="startDrill('${encodeURIComponent(p)}')">开始</button></div>`;
+  });
+  html += `<div class="task"><div>全部混合练习</div><button class="btn" onclick="startDrill('')">开始</button></div>`;
+  document.getElementById('drillBox').innerHTML = html;
+}
+
+// 套卷模式选择视图：四种模式 + 题目列表
+function openDrillSrc(enc){
+  const src = decodeURIComponent(enc);
+  const qs = QUESTIONS.filter(q => q.src === src);
+  const notDone = qs.filter(q => !drillStat(q.id)).length;
+  const wrongN = qs.filter(q => { const s = drillStat(q.id); return s && s.ok < s.n; }).length;
+  let html = `<h2>${esc(src)}</h2>
     <p class="note" style="margin-bottom:12px">
-      <b>已入库：</b>${esc(srcNote)}。<br>
-      题型：完成对话 / 阅读理解 / 词汇语法。翻译与作文请在「资料」打开 PDF。<br>
-      湖南 2021 真题与全真模拟卷为扫描件，暂未全部自动入库，可在「资料」看原卷。
-    </p>
-    ${byPart}
-    <div class="task"><div>全部混合练习</div><button class="btn" onclick="startDrill('')">开始</button></div>
-    <h2 style="font-size:15px;margin-top:16px">按来源练习</h2>
-    <div>${srcButtons}</div>`;
+      <a href="javascript:renderDrillHome()" style="color:#8b5e3c">‹ 返回套卷列表</a>
+      　共 ${qs.length} 题 · 未做 ${notDone} · 曾错 ${wrongN}</p>
+    <div class="task"><div>顺序做<div class="note">按原题号从第 1 题开始</div></div>
+      <button class="btn" onclick="startDrillSeq('${enc}')">开始</button></div>
+    <div class="task"><div>只做没做过的<div class="note">${notDone} 题</div></div>
+      <button class="btn" onclick="startDrillNew('${enc}')">开始</button></div>
+    <div class="task"><div>只做做错的<div class="note">${wrongN} 题</div></div>
+      <button class="btn" onclick="startDrillWrong('${enc}')">开始</button></div>
+    <div class="task"><div>重做整套<div class="note">从头再过一遍（保留历史）</div></div>
+      <button class="btn" onclick="startDrillSeq('${enc}')">开始</button></div>
+    <h2 style="font-size:15px;margin-top:14px">题目列表（点「练」单题练习）</h2>`;
+  qs.forEach((q, i) => {
+    const s = drillStat(q.id);
+    const badge = !s ? '<span class="note">未做</span>'
+      : s.cleared ? '<span style="color:#4caf50">已巩固</span>'
+      : (s.lastOk ? '<span style="color:#4caf50">对</span>' : '<span style="color:#e57373">错</span>');
+    html += `<div class="task"><div style="flex:1">第 ${i + 1} 题 <span class="note">${esc(q.part)}</span> ${badge}</div>
+      <button class="btn ghost" onclick="startSingleDrill('${esc(q.id)}')">练</button></div>`;
+  });
+  document.getElementById('drillBox').innerHTML = html;
 }
 
 function startDrill(part){
