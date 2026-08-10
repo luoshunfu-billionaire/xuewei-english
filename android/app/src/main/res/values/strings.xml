@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">学位英语</string>
+    <string name="title_activity_main">学位英语</string>
+    <string name="package_name">com.xuewei.english</string>
+    <string name="custom_url_scheme">com.xuewei.english</string>
+</resources>

@@ -19,19 +19,34 @@ export JAVA_HOME="D:/dev/jdk-21"   # Capacitor 8 需要 JDK 21
 
 | 文件 | 作用 |
 |---|---|
-| `xuewei-release.keystore` | 发布签名证书（已 gitignore）。**丢失 = 无法覆盖安装，只能卸载重装、进度清零** |
-| `keystore.properties` | 签名密码（已 gitignore），与 keystore 一起备份 |
+| `xuewei-release.keystore` | 发布签名证书（**已提交 git**，换电脑可同签名覆盖安装）。**丢失 = 无法覆盖安装，只能卸载重装、进度清零** |
+| `keystore.properties` | 签名密码（**已提交 git**），与 keystore 一起用 |
+| `android/` | Capacitor 安卓工程源码（**已提交**；`build/`、`.gradle/`、`local.properties` 仍忽略） |
 | `_build_app.py` | Web 资源 → app/ 的拷贝脚本 |
 | `capacitor.config.json` | Capacitor 配置（appId、webDir） |
 
-建议把 keystore 和 properties 复制一份到网盘/移动硬盘。
+仍建议把 keystore 和 properties 再复制一份到网盘/移动硬盘。
 
-## 环境（一次性搭建，已完成）
+## 换电脑后首次打包
 
-- Node 24；**JDK 21 位于 `D:/dev/jdk-21`**（Capacitor 8 要求 JDK 21，构建前 `export JAVA_HOME`）
-- Android SDK 位于 `D:/dev/android-sdk`（cmdline-tools + platform-36 + build-tools 36）
+```bash
+git pull
+npm install
+py -3 _build_app.py
+npx cap sync android
+# 按本机路径写 android/local.properties（sdk.dir=...），并设置 JAVA_HOME 为 JDK 21
+cd android
+./gradlew.bat assembleRelease
+```
+
+`app/`、`node_modules/`、APK 产物不进 git：分别用 `_build_app.py` / `npm install` / gradle 生成。
+
+## 环境（一次性搭建）
+
+- Node 24；**JDK 21**（Capacitor 8 要求；本机曾用 `D:/dev/jdk-21`，构建前设 `JAVA_HOME`）
+- Android SDK（cmdline-tools + platform-36 + build-tools 36；本机曾用 `D:/dev/android-sdk`）
 - Capacitor 依赖在 `node_modules/`（`npm install` 可恢复）
-- 若重装了 SDK 到别处，改 `android/local.properties` 里的 `sdk.dir`
+- SDK 路径写在 `android/local.properties` 的 `sdk.dir`（该文件按机器本地生成，不提交）
 - Gradle 下载地址已换成腾讯镜像（`android/gradle/wrapper/gradle-wrapper.properties`）
 
 ## 手机端说明

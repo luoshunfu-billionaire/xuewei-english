@@ -12,8 +12,12 @@ _t*.png
 _p*.png
 
 # App 打包（Capacitor）
+# android/ 工程源码要提交（多电脑打包）；build/.gradle/local.properties 由 android/.gitignore 排除
+# app/ 由 _build_app.py 生成，勿提交
+# node_modules/ 用 npm install 恢复
 node_modules/
-android/
-app/
+/app/
 *.apk
-*.keystore
+
+# 签名证书与 keystore.properties 要提交，换电脑才能继续打同签名包（覆盖安装不丢进度）
+# 勿再忽略 *.keystore
